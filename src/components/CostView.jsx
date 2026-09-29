@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import DATA from '../data/dashboard_data.json';
 import {
   fmtNum1, fmtCur, fmtCurP, fmtPct, sum, groupSum, sortedEntries, monthRange, monthKey, monthLabel,
-  previousPeriod, delta,
+  previousPeriod, delta, daysBetween,
 } from '../lib/format';
 import { catColor, cssVar } from '../lib/svg';
 import { KpiTile, Chip } from './Kpi';
@@ -13,6 +13,33 @@ import DataTable from './DataTable';
 
 const setOK = (arr, v) => !arr.length || arr.includes(v);
 const inRangeFn = (start, end) => (iso) => iso && iso >= start && iso <= end;
+
+// PONumber -> order date, built once (structural join, not range-dependent).
+const PO_ORDER_DATE = new Map();
+DATA.pos.forEach((r) => { if (!PO_ORDER_DATE.has(r.po)) PO_ORDER_DATE.set(r.po, r.d); });
+const VENDOR_STATED = new Map(DATA.vendors.map((v) => [v.name, v.leadTimeDays]));
+
+function vendorLeadTime(start, end) {
+  const inRange = inRangeFn(start, end);
+  const rows = DATA.receipts.filter((r) => inRange(r.d) && PO_ORDER_DATE.get(r.po));
+  const byVendor = new Map();
+  rows.forEach((r) => {
+    const orderDate = PO_ORDER_DATE.get(r.po);
+    const actual = daysBetween(orderDate, r.d);
+    if (actual === null || actual < 0) return;
+    if (!byVendor.has(r.vendor)) byVendor.set(r.vendor, []);
+    byVendor.get(r.vendor).push(actual);
+  });
+  const items = [];
+  byVendor.forEach((arr, vendor) => {
+    const stated = VENDOR_STATED.get(vendor);
+    if (stated == null) return;
+    const actualAvg = arr.reduce((a, b) => a + b, 0) / arr.length;
+    items.push({ label: vendor, value: actualAvg - stated, actualAvg, stated, n: arr.length });
+  });
+  const avgVariance = items.length ? items.reduce((a, d) => a + d.value, 0) / items.length : 0;
+  return { items, avgVariance };
+}
 
 function revenueWindow(start, end, family, segment, region) {
   const inRange = inRangeFn(start, end);
@@ -85,30 +112,51 @@ export default function CostView({ state, minDate }) {
     });
     costVariation.sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
 
-    let prevDelta = { revenue: null, margin: null, marginRate: null, outstanding: null, avgRevPerOrder: null };
+    // per-product margin ranking
+    const revByProd = groupSum(cur.invLines, (r) => r.prod, (r) => r.amt);
+    const costByProd = groupSum(cur.costRows, (r) => r.prod, (r) => r.totCost);
+    const prodSet = new Set([...revByProd.keys(), ...costByProd.keys()]);
+    const marginByProd = [];
+    prodSet.forEach((prod) => {
+      const revenue = revByProd.get(prod) || 0, cost = costByProd.get(prod) || 0;
+      const margin = revenue - cost;
+      marginByProd.push({ prod, revenue, cost, margin, marginRate: revenue ? (margin / revenue) * 100 : 0 });
+    });
+    marginByProd.sort((a, b) => b.margin - a.margin);
+
+    const leadTime = vendorLeadTime(start, end);
+
+    let prevDelta = { revenue: null, margin: null, marginRate: null, outstanding: null, avgRevPerOrder: null, leadTime: null };
     if (compareMode !== 'none') {
       const pw = previousPeriod(start, end, compareMode, minDate);
       if (pw) {
         const prev = revenueWindow(pw.start, pw.end, family, segment, region);
+        const prevLeadTime = vendorLeadTime(pw.start, pw.end);
         prevDelta = {
           revenue: delta(cur.revenue, prev.revenue),
           margin: delta(cur.margin, prev.margin),
           marginRate: delta(cur.marginRate, prev.marginRate),
           outstanding: delta(cur.outstanding, prev.outstanding),
           avgRevPerOrder: delta(cur.avgRevPerOrder, prev.avgRevPerOrder),
+          leadTime: delta(leadTime.avgVariance, prevLeadTime.avgVariance),
         };
       }
     }
 
+    const revSpark = months.map((k) => revByMonth.get(k) || 0);
+    const marginSpark = months.map((k) => marginByMonth.get(k) || 0);
+
     return {
       cur, months, revByMonth, marginByMonth, revByFam, revBySegment, arByStatus, arColor, varItems,
-      custRev, custConcentration, vendorSpend, vendorConcentration, costVariation, prevDelta,
+      custRev, custConcentration, vendorSpend, vendorConcentration, costVariation, marginByProd, leadTime,
+      prevDelta, revSpark, marginSpark,
     };
   }, [start, end, family, brand, segment, region, compareMode, minDate]);
 
   const {
     cur, months, revByMonth, marginByMonth, revByFam, revBySegment, arByStatus, arColor, varItems,
-    custRev, custConcentration, vendorSpend, vendorConcentration, costVariation, prevDelta,
+    custRev, custConcentration, vendorSpend, vendorConcentration, costVariation, marginByProd, leadTime,
+    prevDelta, revSpark, marginSpark,
   } = computed;
 
   const compareOn = compareMode !== 'none';
@@ -116,9 +164,9 @@ export default function CostView({ state, minDate }) {
   return (
     <main className="view active">
       <section className="kpi-row">
-        <KpiTile label="Invoiced revenue" value={fmtCur.format(cur.revenue)} sub="Selected range" delta={compareOn ? prevDelta.revenue : undefined} goodDirection="up" />
+        <KpiTile label="Invoiced revenue" value={fmtCur.format(cur.revenue)} sub="Selected range" delta={compareOn ? prevDelta.revenue : undefined} goodDirection="up" spark={revSpark} sparkColor={catColor(0)} />
         <KpiTile label="Material cost" value={fmtCur.format(cur.materialCost)} sub="Completed manufacturing orders" />
-        <KpiTile label="Est. gross margin" value={fmtCur.format(cur.margin)} sub={cur.margin >= 0 ? <Chip kind="good" label="Positive" /> : <Chip kind="critical" label="Negative" />} delta={compareOn ? prevDelta.margin : undefined} goodDirection="up" />
+        <KpiTile label="Est. gross margin" value={fmtCur.format(cur.margin)} sub={cur.margin >= 0 ? <Chip kind="good" label="Positive" /> : <Chip kind="critical" label="Negative" />} delta={compareOn ? prevDelta.margin : undefined} goodDirection="up" spark={marginSpark} sparkColor={catColor(2)} />
         <KpiTile label="Est. margin rate" value={`${fmtNum1.format(cur.marginRate)}%`} sub={cur.marginRate >= 30 ? <Chip kind="good" label="Healthy" /> : <Chip kind="warning" label="Watch" />} delta={compareOn ? prevDelta.marginRate : undefined} goodDirection="up" />
         <KpiTile label="Avg. unit material cost" value={fmtCurP.format(cur.avgUnitCost)} sub="Per unit produced" />
         <KpiTile label="Avg. cost variance" value={fmtPct(cur.avgVarPct)} sub={cur.avgVarPct > 0 ? <Chip kind="warning" label="Over standard" /> : <Chip kind="good" label="Under standard" />} />
@@ -129,6 +177,11 @@ export default function CostView({ state, minDate }) {
         <KpiTile label="Avg. revenue per order" value={fmtCur.format(cur.avgRevPerOrder)} sub="Per distinct invoice" delta={compareOn ? prevDelta.avgRevPerOrder : undefined} goodDirection="up" />
         <KpiTile label="Top-3 customer share" value={`${fmtNum1.format(custConcentration)}%`} sub={custConcentration >= 40 ? <Chip kind="warning" label="Concentrated" /> : <Chip kind="good" label="Diversified" />} />
         <KpiTile label="Top-3 vendor share" value={`${fmtNum1.format(vendorConcentration)}%`} sub={vendorConcentration >= 40 ? <Chip kind="warning" label="Concentrated" /> : <Chip kind="good" label="Diversified" />} />
+        <KpiTile
+          label="Vendor lead-time variance" value={leadTime.items.length ? `${leadTime.avgVariance >= 0 ? '+' : ''}${fmtNum1.format(leadTime.avgVariance)} days` : '—'}
+          sub={leadTime.items.length ? (leadTime.avgVariance <= 0 ? <Chip kind="good" label="On time" /> : <Chip kind="warning" label="Running late" />) : 'No receipts in range'}
+          delta={compareOn ? prevDelta.leadTime : undefined} goodDirection="down"
+        />
       </section>
 
       <section className="chart-grid">
@@ -195,6 +248,22 @@ export default function CostView({ state, minDate }) {
       </section>
 
       <section className="chart-grid">
+        <div className="card full">
+          <h3>Vendor lead time: actual vs. stated</h3>
+          <p className="cap">Average days from PO order date to receipt, minus the vendor's stated lead time</p>
+          <div className="chart-scroll">
+            {leadTime.items.length
+              ? <DivergingChart items={leadTime.items.slice().sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, topN)} fmt={(v) => `${v >= 0 ? '+' : ''}${fmtNum1.format(v)} days vs. stated`} />
+              : <p className="cap">No receipts in range.</p>}
+          </div>
+          <div className="legend">
+            <span className="legend-item"><span className="legend-swatch" style={{ background: 'var(--div-a)' }} />Faster than stated</span>
+            <span className="legend-item"><span className="legend-swatch" style={{ background: 'var(--div-b)' }} />Slower than stated</span>
+          </div>
+        </div>
+      </section>
+
+      <section className="chart-grid">
         <div className="card">
           <h3>Top customers by revenue</h3>
           <p className="cap">Within the selected range and filters</p>
@@ -218,6 +287,28 @@ export default function CostView({ state, minDate }) {
                 { key: 'vendor', label: 'Vendor', render: (v) => v },
                 { key: 'amt', label: 'Spend', num: true, render: (v) => fmtCur.format(v) },
               ]}
+            />
+          </div>
+        </div>
+      </section>
+
+      <section className="chart-grid">
+        <div className="card full">
+          <h3>Product margin ranking</h3>
+          <p className="cap">Revenue minus material cost, by product, within the selected range</p>
+          <div className="table-wrap">
+            <DataTable
+              rows={marginByProd} topN={topN} searchKeys={['prod']}
+              cols={[
+                { key: 'prod', label: 'Product', render: (v) => v },
+                { key: 'revenue', label: 'Revenue', num: true, render: (v) => fmtCur.format(v) },
+                { key: 'cost', label: 'Material cost', num: true, render: (v) => fmtCur.format(v) },
+                { key: 'margin', label: 'Margin', num: true, render: (v) => fmtCur.format(v) },
+                { key: 'marginRate', label: 'Margin rate', num: true, render: (v) => fmtNum1.format(v) + '%' },
+              ]}
+              chipFn={(r) => r.margin >= 0
+                ? '<span class="chip good"><span class="dot" style="background:var(--good);"></span>Positive</span>'
+                : '<span class="chip critical"><span class="dot" style="background:var(--critical);"></span>Negative</span>'}
             />
           </div>
         </div>

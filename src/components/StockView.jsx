@@ -2,12 +2,13 @@ import { useMemo } from 'react';
 import DATA from '../data/dashboard_data.json';
 import {
   fmtNum, fmtCur, fmtNum1, sum, groupSum, sortedEntries, monthRange, monthKey, monthLabel,
-  daysBetween, previousPeriod, delta,
+  daysBetween, previousPeriod, delta, dayOfWeekMon0, dowLabel,
 } from '../lib/format';
-import { catColor } from '../lib/svg';
+import { catColor, sequentialColor } from '../lib/svg';
 import { KpiTile, Chip } from './Kpi';
 import BarChart from './charts/BarChart';
 import GroupedBarChart from './charts/GroupedBarChart';
+import LineChart from './charts/LineChart';
 import DataTable from './DataTable';
 
 const setOK = (arr, v) => !arr.length || arr.includes(v);
@@ -27,6 +28,13 @@ function incomingPoQty(start, end) {
   const inRange = inRangeFn(start, end);
   const rows = DATA.pos.filter((r) => inRange(r.d) && r.open);
   return sum(rows, (r) => r.qOpen);
+}
+function mfgYield(start, end, family) {
+  const inRange = inRangeFn(start, end);
+  const rows = DATA.mos.filter((r) => inRange(r.comp) && setOK(family, r.fam) && r.qPlan > 0);
+  const qPlan = sum(rows, (r) => r.qPlan);
+  const qComp = sum(rows, (r) => r.qComp);
+  return { rows, qPlan, qComp, rate: qPlan ? (qComp / qPlan) * 100 : 0 };
 }
 
 export default function StockView({ state, minDate }) {
@@ -102,36 +110,58 @@ export default function StockView({ state, minDate }) {
     const incomingByMonth = Array.from(incomingByMonthMap.keys()).sort()
       .map((k) => ({ label: monthLabel(k), value: incomingByMonthMap.get(k) }));
 
+    // manufacturing yield: current, monthly series (also feeds the KPI sparkline)
+    const curYield = mfgYield(start, end, family);
+    const yieldPlanByMonth = groupSum(curYield.rows, (r) => monthKey(r.comp), (r) => r.qPlan);
+    const yieldCompByMonth = groupSum(curYield.rows, (r) => monthKey(r.comp), (r) => r.qComp);
+    const yieldByMonth = new Map(months.map((k) => {
+      const p = yieldPlanByMonth.get(k) || 0, c = yieldCompByMonth.get(k) || 0;
+      return [k, p ? (c / p) * 100 : null];
+    }));
+
+    // order lines by day of week (Mon..Sun)
+    const dowCounts = [0, 0, 0, 0, 0, 0, 0];
+    cur.rows.forEach((r) => { if (r.d) dowCounts[dayOfWeekMon0(r.d)]++; });
+    const maxDow = Math.max(...dowCounts, 1);
+    const byDayOfWeek = dowCounts.map((value, i) => ({ label: dowLabel(i), value, _i: i }));
+
     // comparison period
-    let prevDelta = { open: null, late: null, delivery: null, remain: null, incoming: null };
+    let prevDelta = { open: null, late: null, delivery: null, remain: null, incoming: null, yieldRate: null };
     if (compareMode !== 'none') {
       const pw = previousPeriod(start, end, compareMode, minDate);
       if (pw) {
         const prev = orderWindow(pw.start, pw.end, family, segment, region);
         const prevIncoming = incomingPoQty(pw.start, pw.end);
+        const prevYield = mfgYield(pw.start, pw.end, family);
         prevDelta = {
           open: delta(cur.open.length, prev.open.length),
           late: delta(cur.late.length, prev.late.length),
           delivery: delta(cur.deliveryRate, prev.deliveryRate),
           remain: delta(cur.remainingToShip, prev.remainingToShip),
           incoming: delta(curIncoming, prevIncoming),
+          yieldRate: delta(curYield.rate, prevYield.rate),
         };
       }
     }
 
     const expiringSorted = expiring.slice().sort((a, b) => a.daysExp - b.daysExp);
+    const openSpark = months.map((k) => openByMonth.get(k) || 0);
+    const lateSpark = months.map((k) => lateByMonth.get(k) || 0);
+    const yieldSpark = months.map((k) => yieldByMonth.get(k)).filter((v) => v !== null);
 
     return {
       invRowsLen: invRows.length, availTotal, blockedRows, blockedValue, expiring, quarantined, avgLotAge,
-      cur, curIncoming, atRisk, belowReorder, overstock, valByFam, availByLoc, months, openByMonth, lateByMonth,
-      daysOfSupply, incomingByMonth, prevDelta, expiringSorted,
+      cur, curIncoming, curYield, atRisk, belowReorder, overstock, valByFam, availByLoc, months, openByMonth, lateByMonth,
+      daysOfSupply, incomingByMonth, yieldByMonth, byDayOfWeek, maxDow, prevDelta, expiringSorted,
+      openSpark, lateSpark, yieldSpark,
     };
   }, [start, end, family, brand, segment, region, compareMode, expiringDays, minDate]);
 
   const {
-    availTotal, blockedRows, blockedValue, expiring, quarantined, avgLotAge, cur, curIncoming,
+    availTotal, blockedRows, blockedValue, expiring, quarantined, avgLotAge, cur, curIncoming, curYield,
     atRisk, belowReorder, overstock, valByFam, availByLoc, months, openByMonth, lateByMonth,
-    daysOfSupply, incomingByMonth, prevDelta, expiringSorted,
+    daysOfSupply, incomingByMonth, yieldByMonth, byDayOfWeek, maxDow, prevDelta, expiringSorted,
+    openSpark, lateSpark, yieldSpark,
   } = computed;
 
   const compareOn = compareMode !== 'none';
@@ -155,6 +185,7 @@ export default function StockView({ state, minDate }) {
         <KpiTile
           label="Open order lines" value={fmtNum.format(cur.open.length)} sub="In selected range"
           delta={compareOn ? prevDelta.open : undefined} goodDirection="down"
+          spark={openSpark} sparkColor="var(--cat1)"
         />
         <KpiTile
           label="Late order lines" value={fmtNum.format(cur.late.length)}
@@ -162,6 +193,7 @@ export default function StockView({ state, minDate }) {
             ? <Chip kind="critical" label={`${fmtNum1.format((100 * cur.late.length) / Math.max(cur.rows.length, 1))}% of lines`} />
             : <Chip kind="good" label="None late" />}
           delta={compareOn ? prevDelta.late : undefined} goodDirection="down"
+          spark={lateSpark} sparkColor="var(--critical)"
         />
       </section>
 
@@ -187,6 +219,12 @@ export default function StockView({ state, minDate }) {
           label="Complete delivery rate" value={`${fmtNum1.format(cur.deliveryRate)}%`}
           sub={cur.deliveryRate >= 80 ? <Chip kind="good" label="Healthy" /> : <Chip kind="warning" label="Watch" />}
           delta={compareOn ? prevDelta.delivery : undefined} goodDirection="up"
+        />
+        <KpiTile
+          label="Production yield" value={`${fmtNum1.format(curYield.rate)}%`}
+          sub={curYield.rows.length ? (curYield.rate >= 95 ? <Chip kind="good" label="On plan" /> : <Chip kind="warning" label="Under plan" />) : 'No completed orders'}
+          delta={compareOn ? prevDelta.yieldRate : undefined} goodDirection="up"
+          spark={yieldSpark} sparkColor="var(--cat3)"
         />
       </section>
 
@@ -231,6 +269,25 @@ export default function StockView({ state, minDate }) {
           <p className="cap">Open PO quantity, by expected receipt month</p>
           <div className="chart-scroll">
             <BarChart items={incomingByMonth} height={220} maxLabels={24} fmt={(v) => fmtNum.format(v) + ' units'} color={(d, i) => catColor(i + 4)} />
+          </div>
+        </div>
+      </section>
+
+      <section className="chart-grid">
+        <div className="card">
+          <h3>Manufacturing yield by month</h3>
+          <p className="cap">Completed &divide; planned quantity, completed orders only</p>
+          <div className="chart-scroll">
+            {yieldSpark.length
+              ? <LineChart buckets={months.filter((k) => yieldByMonth.get(k) !== null)} seriesMap={yieldByMonth} height={220} color="var(--cat3)" labelFn={monthLabel} fmt={(v) => fmtNum1.format(v) + '%'} fmtShort={(v) => fmtNum1.format(v) + '%'} />
+              : <p className="cap">No completed manufacturing orders in range.</p>}
+          </div>
+        </div>
+        <div className="card">
+          <h3>Order lines by day of week</h3>
+          <p className="cap">Sales order lines placed, by weekday &middot; darker = busier</p>
+          <div className="chart-scroll">
+            <BarChart items={byDayOfWeek} height={220} maxLabels={7} fmt={(v) => fmtNum.format(v) + ' lines'} color={(d) => sequentialColor(d.value, maxDow)} />
           </div>
         </div>
       </section>

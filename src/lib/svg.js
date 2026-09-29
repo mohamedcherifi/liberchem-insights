@@ -20,3 +20,11 @@ export function cssVar(name) {
 export function catColor(i) {
   return cssVar(CAT_ORDER[i % CAT_ORDER.length]);
 }
+
+const SEQ_STEPS = ['--seq-100', '--seq-300', '--seq-500', '--seq-700'];
+// Buckets a value into a 4-step sequential ramp relative to the max in its set (magnitude, not identity).
+export function sequentialColor(value, maxValue) {
+  const ratio = maxValue > 0 ? value / maxValue : 0;
+  const idx = ratio >= 0.85 ? 3 : ratio >= 0.6 ? 2 : ratio >= 0.35 ? 1 : 0;
+  return cssVar(SEQ_STEPS[idx]);
+}

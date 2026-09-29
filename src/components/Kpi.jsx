@@ -1,3 +1,5 @@
+import Sparkline from './charts/Sparkline';
+
 export function Chip({ kind, label }) {
   return (
     <span className={`chip ${kind}`}>
@@ -20,13 +22,18 @@ export function DeltaChip({ d, goodDirection = 'up', suffix = '' }) {
   );
 }
 
-export function KpiTile({ label, value, sub, delta: d, goodDirection }) {
+export function KpiTile({ label, value, sub, delta: d, goodDirection, spark, sparkColor }) {
   return (
     <div className="kpi-tile">
-      <div className="kpi-label">{label}</div>
-      <div className="kpi-value">{value}</div>
-      <div className="kpi-sub">{sub}</div>
-      {d !== undefined && <DeltaChip d={d} goodDirection={goodDirection} />}
+      <div className="kpi-main">
+        <div className="kpi-label">{label}</div>
+        <div className="kpi-value">{value}</div>
+        <div className="kpi-sub">{sub}</div>
+        {d !== undefined && <DeltaChip d={d} goodDirection={goodDirection} />}
+      </div>
+      {spark && spark.length >= 2 && (
+        <div className="kpi-spark"><Sparkline values={spark} color={sparkColor} /></div>
+      )}
     </div>
   );
 }

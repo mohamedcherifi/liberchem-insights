@@ -67,6 +67,16 @@ export function delta(curr, prev) {
   return { pct, dir: pct > 0.05 ? 'up' : pct < -0.05 ? 'down' : 'flat' };
 }
 
+const DOW_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+// Returns 0=Monday..6=Sunday to match a conventional business-week reading order.
+export function dayOfWeekMon0(iso) {
+  const d = new Date(iso + 'T00:00:00Z').getUTCDay(); // 0=Sun..6=Sat
+  return (d + 6) % 7;
+}
+export function dowLabel(mon0Index) {
+  return DOW_LABELS[(mon0Index + 1) % 7];
+}
+
 export function monthRange(startIso, endIso) {
   const out = [];
   let [y, m] = startIso.slice(0, 7).split('-').map(Number);
