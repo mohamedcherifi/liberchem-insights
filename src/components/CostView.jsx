@@ -97,18 +97,25 @@ export default function CostView({ state, minDate }) {
     const top3VendorSpend = sortedEntries(spendByVendor).slice(0, 3).reduce((a, [, v]) => a + v, 0);
     const vendorConcentration = totalSpend ? (top3VendorSpend / totalSpend) * 100 : 0;
 
-    // purchase cost variation by item category: current-range avg unit cost vs all-time avg unit cost
-    const allTimeByCat = groupSum(DATA.pos, (r) => r.cat, (r) => 1);
-    const allTimeSumByCat = groupSum(DATA.pos, (r) => r.cat, (r) => r.cost);
+    // purchase cost variation by item category: current-range avg unit cost vs a fixed
+    // historical baseline (first 90 days of data). A baseline of "all pos rows" would
+    // degenerate to ~0% whenever the full date range is selected, since the range would
+    // then include itself — a fixed baseline stays meaningful regardless of the filter.
+    const baselineEndD = new Date(minDate + 'T00:00:00Z');
+    baselineEndD.setUTCDate(baselineEndD.getUTCDate() + 90);
+    const baselineEnd = baselineEndD.toISOString().slice(0, 10);
+    const baselineRows = DATA.pos.filter((r) => r.d && r.d >= minDate && r.d <= baselineEnd);
+    const baselineCountByCat = groupSum(baselineRows, (r) => r.cat, () => 1);
+    const baselineSumByCat = groupSum(baselineRows, (r) => r.cat, (r) => r.cost);
     const rangeSumByCat = groupSum(posInRange, (r) => r.cat, (r) => r.cost);
     const rangeCountByCat = groupSum(posInRange, (r) => r.cat, () => 1);
     const costVariation = [];
-    allTimeByCat.forEach((count, cat) => {
-      const allTimeAvg = (allTimeSumByCat.get(cat) || 0) / count;
+    baselineCountByCat.forEach((count, cat) => {
+      const baselineAvg = (baselineSumByCat.get(cat) || 0) / count;
       const rangeCount = rangeCountByCat.get(cat) || 0;
-      if (!rangeCount || !allTimeAvg) return;
+      if (!rangeCount || !baselineAvg) return;
       const rangeAvg = (rangeSumByCat.get(cat) || 0) / rangeCount;
-      costVariation.push({ label: cat, value: ((rangeAvg - allTimeAvg) / allTimeAvg) * 100 });
+      costVariation.push({ label: cat, value: ((rangeAvg - baselineAvg) / baselineAvg) * 100 });
     });
     costVariation.sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
 
@@ -236,9 +243,9 @@ export default function CostView({ state, minDate }) {
         </div>
         <div className="card full">
           <h3>Purchase cost variation by material category</h3>
-          <p className="cap">Selected-range average unit cost vs. all-time average, per item category</p>
+          <p className="cap">Selected-range average unit cost vs. first-90-days baseline, per item category</p>
           <div className="chart-scroll">
-            <DivergingChart items={costVariation.slice(0, topN)} fmt={(v) => (v >= 0 ? '+' : '') + fmtNum1.format(v) + '% vs. all-time avg'} />
+            <DivergingChart items={costVariation.slice(0, topN)} fmt={(v) => (v >= 0 ? '+' : '') + fmtNum1.format(v) + '% vs. baseline'} />
           </div>
           <div className="legend">
             <span className="legend-item"><span className="legend-swatch" style={{ background: 'var(--div-a)' }} />Cheaper than usual</span>
