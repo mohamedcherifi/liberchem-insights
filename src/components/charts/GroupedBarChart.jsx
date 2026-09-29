@@ -1,49 +1,26 @@
-import { roundedTopPath } from '../../lib/svg';
+import { BarChart as RBarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
+import { cssVar } from '../../lib/svg';
 import { fmtNum } from '../../lib/format';
-import { useTooltip } from '../Tooltip';
+import { ChartTooltip } from './ChartTooltip';
+import { WrappedTick } from './WrappedTick';
 
 export default function GroupedBarChart({ buckets, seriesA, seriesB, height = 240, colorA, colorB, labelFn }) {
-  const { show, hide } = useTooltip();
   if (!buckets.length) return <p className="cap">No data in range.</p>;
 
-  const H = height, padL = 6, padR = 6, padT = 18, padB = 34;
-  const groupMinW = 46, gap = 16;
   const n = buckets.length;
-  const W = Math.max(560, n * (groupMinW + gap) + padL + padR);
-  const innerW = W - padL - padR, innerH = H - padT - padB;
-  const maxV = Math.max(1, ...buckets.map((k) => Math.max(seriesA.get(k) || 0, seriesB.get(k) || 0)));
-  const groupW = innerW / n;
-  const barW = (groupW - gap) / 2;
+  const groupMinW = 46, gap = 16;
+  const W = Math.max(560, n * (groupMinW + gap) + 40);
+  const data = buckets.map((k) => ({ key: k, label: labelFn(k), Open: seriesA.get(k) || 0, Late: seriesB.get(k) || 0 }));
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H}>
-      <line className="axis-line" x1={padL} y1={H - padB} x2={W - padR} y2={H - padB} />
-      {buckets.map((k, i) => {
-        const gx = padL + i * groupW + gap / 2;
-        const va = seriesA.get(k) || 0, vb = seriesB.get(k) || 0;
-        return (
-          <g key={k}>
-            {[[va, colorA, 0, 'Open'], [vb, colorB, 1, 'Late']].map(([v, c, j, label]) => {
-              const bh = (v / maxV) * innerH;
-              const x = gx + j * (barW + 2);
-              const y = H - padB - bh;
-              return (
-                <path
-                  key={j}
-                  d={roundedTopPath(x, y, barW, bh, 3)}
-                  className="bar"
-                  fill={c}
-                  onMouseMove={(e) => show(e.clientX, e.clientY, `<div class="t-title">${labelFn(k)}</div>${label}: ${fmtNum.format(v)}`)}
-                  onMouseLeave={hide}
-                />
-              );
-            })}
-            {n <= 24 && (
-              <text x={gx + barW + 1} y={H - padB + 16} textAnchor="middle" className="cat-label">{labelFn(k)}</text>
-            )}
-          </g>
-        );
-      })}
-    </svg>
+    <div style={{ width: W, height }}>
+    <RBarChart width={W} height={height} data={data} margin={{ top: 10, right: 10, left: 10, bottom: 30 }} barGap={2}>
+      <XAxis dataKey="label" axisLine={{ stroke: cssVar('--baseline') }} tickLine={false} tick={<WrappedTick maxChars={10} />} interval={0} />
+      <YAxis hide domain={[0, 'dataMax']} />
+      <Tooltip cursor={{ fill: cssVar('--grid') }} content={<ChartTooltip formatter={(v) => fmtNum.format(v)} />} />
+      <Bar dataKey="Open" name="Open" fill={colorA} radius={[3, 3, 0, 0]} maxBarSize={22} />
+      <Bar dataKey="Late" name="Late" fill={colorB} radius={[3, 3, 0, 0]} maxBarSize={22} />
+    </RBarChart>
+    </div>
   );
 }

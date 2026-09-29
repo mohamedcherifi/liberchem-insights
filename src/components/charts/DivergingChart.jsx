@@ -1,41 +1,33 @@
+import { BarChart as RBarChart, Bar, XAxis, YAxis, Tooltip, Cell, ReferenceLine } from 'recharts';
 import { cssVar } from '../../lib/svg';
-import { useTooltip } from '../Tooltip';
 
 export default function DivergingChart({ items, fmt }) {
-  const { show, hide } = useTooltip();
   if (!items.length) return <p className="cap">No data in range.</p>;
 
-  const rowH = 26, padL = 176, padR = 60, padT = 8, padB = 8;
-  const n = items.length;
-  const H = n * rowH + padT + padB;
+  const rowH = 26;
+  const H = items.length * rowH + 16;
   const W = 640;
-  const innerW = W - padL - padR;
   const maxAbs = Math.max(...items.map((d) => Math.abs(d.value)), 0.01);
-  const mid = padL + innerW / 2;
-  const scale = innerW / 2 / maxAbs;
   const divA = cssVar('--div-a'), divB = cssVar('--div-b');
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H}>
-      <line className="axis-line" x1={mid} y1={padT} x2={mid} y2={H - padB} />
-      {items.map((d, i) => {
-        const y = padT + i * rowH + 4;
-        const bh = rowH - 10;
-        const w = Math.abs(d.value) * scale;
-        const x = d.value >= 0 ? mid : mid - w;
-        const color = d.value >= 0 ? divB : divA;
-        const label = d.label.length > 24 ? d.label.slice(0, 23) + '…' : d.label;
-        return (
-          <g key={d.label}>
-            <rect
-              x={x} y={y} width={Math.max(w, 1.5)} height={bh} rx={2} fill={color} className="bar"
-              onMouseMove={(e) => show(e.clientX, e.clientY, `<div class="t-title">${d.label}</div>${fmt(d.value)}`)}
-              onMouseLeave={hide}
-            />
-            <text x={padL - 10} y={y + bh / 2 + 3.5} textAnchor="end" className="cat-label">{label}</text>
-          </g>
-        );
-      })}
-    </svg>
+    <div style={{ width: W, height: H }}>
+    <RBarChart width={W} height={H} data={items} layout="vertical" margin={{ top: 8, right: 20, left: 10, bottom: 8 }} barCategoryGap={6}>
+      <XAxis type="number" domain={[-maxAbs, maxAbs]} hide />
+      <YAxis type="category" dataKey="label" width={176} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: cssVar('--muted') }} interval={0} />
+      <ReferenceLine x={0} stroke={cssVar('--baseline')} />
+      <Tooltip
+        cursor={{ fill: cssVar('--grid') }}
+        content={({ active, payload }) => {
+          if (!active || !payload || !payload.length) return null;
+          const d = payload[0].payload;
+          return <div className="tooltip" style={{ position: 'static' }}><div className="t-title">{d.label}</div>{fmt(d.value)}</div>;
+        }}
+      />
+      <Bar dataKey="value" radius={2} maxBarSize={18}>
+        {items.map((d) => <Cell key={d.label} fill={d.value >= 0 ? divB : divA} />)}
+      </Bar>
+    </RBarChart>
+    </div>
   );
 }

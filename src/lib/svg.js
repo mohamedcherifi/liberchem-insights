@@ -1,9 +1,3 @@
-export function roundedTopPath(x, y, w, h, r) {
-  r = Math.min(r, w / 2, h);
-  if (h <= 0) return `M${x},${y + h} L${x + w},${y + h} Z`;
-  return `M${x},${y + h} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + w - r},${y} Q${x + w},${y} ${x + w},${y + r} L${x + w},${y + h} Z`;
-}
-
 export function wrapLabel(text, maxChars) {
   if (text.length <= maxChars) return [text];
   const words = text.split(' ');
